@@ -61,7 +61,7 @@ class BoostIn(Explainer):
 
         return self
 
-    def get_local_influence(self, X, y, oporp_eng , verbose=1 ):
+    def get_local_influence(self, X, y, oporp_eng , verbose=1 , gpu = 0):
         """
         - Computes effect of each train example on the loss of the test example.
 
@@ -96,7 +96,7 @@ class BoostIn(Explainer):
         # compute attributions for each test example
         for i in range(X.shape[0]):
             mask = np.where(train_leaf_idxs == test_leaf_idxs[i], 1, 0)  # shape=(no. train, no. boost, no. class)
-            mask_tensor = torch.tensor(mask , dtype=torch.float32, device = torch.device('cuda:0'))
+            mask_tensor = torch.tensor(mask , dtype=torch.float32, device = torch.device(f'cuda:{gpu}'))
             #prod = torch.matmul(train_leaf_dvs , test_gradients[i])* mask  # shape=(no. train, no. boost, no. class)
             
             #prod = torch.einsum('ijk,jk->ijk', train_leaf_dvs, test_gradients[i]) * mask  # shape=(no. train, no. boost, no. class)
@@ -196,7 +196,6 @@ class BoostIn(Explainer):
         # result container
         leaf_dvs = torch.zeros((n_train, n_boost, n_class), dtype=torch.float32 , device=torch.device(f'cuda:{gpu}'))  # Initialize as torch tensor
         # shape=(X.shape[0], n_boost, n_class)
-        oporp_eng_values = []
 
 
         #trying to connect things here

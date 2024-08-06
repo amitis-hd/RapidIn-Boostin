@@ -66,8 +66,11 @@ def MP_run_calc_infulence_function(rank, world_size, process_id, mp_engine, X_tr
         
         print(f"CUDA {rank}: Model loaded!")
 
-        temp = []
+        
         temp = explainer.train_leaf_dvs_
+        print(f"dim 1: {temp[0]}")
+        print(f"dim 2: {temp[0][0]}")
+        print(f"dim 3 : {temp[0][0][0]}")
 
         
 
@@ -86,11 +89,10 @@ def MP_run_calc_infulence_function(rank, world_size, process_id, mp_engine, X_tr
         
     influence = torch.zeros((train_dataset_size, len(X_test)), device=torch.device(f'cuda:{rank}'))
     s_test_vec_t = None
-    test_gradients = torch.zeros((90 , 100) , device = torch.device(f'cuda:{rank}'))
+   
     filled = False
     grad_path_name = None
-    temp = []
-    ops = []
+
 
     
     #grad_path_name = "./grads_path/" + f"/train_grad_{real_id:08d}.pt"
@@ -113,15 +115,18 @@ def MP_run_calc_infulence_function(rank, world_size, process_id, mp_engine, X_tr
             break
 
     """
-    temp = explainer._compute_gradients(X_train , y_train , oporp_eng , rank)
+    grads = explainer._compute_gradients(X_train , y_train , oporp_eng , rank)
+    test_gradients = torch.zeros((grads.size(0) , grads.size(1)) , device = torch.device(f'cuda:{rank}'))
+    print(f"temp dvs shape: {temp.shape}")
     for i in range(temp.size(0)):
         print(f"shape of gradient at {i} : {temp[i].shape}")
         print(f"gradient: {temp[i]}")
-        test_gradients[i] = oporp_eng(temp[i] , 100)
+        test_gradients[i] = oporp_eng(grads[i] , 100)
         print(f"rapid grad: {test_gradients[i]}")
-    leaf_dvs = torch.zeros((temp.size(0), 100),  device=torch.device(f'cuda:{rank}') )
+    leaf_dvs = torch.zeros((temp.size(0), temp.size(1) ),  device=torch.device(f'cuda:{rank}') )
     
     for i in range (temp.size(0)):
+
         leaf_dvs[i] = (oporp_eng(temp[i],100))
     
 
@@ -136,28 +141,17 @@ def MP_run_calc_infulence_function(rank, world_size, process_id, mp_engine, X_tr
     for i in range(len(X_test)):
         
         mask = np.where(train_leaf_idxs == test_leaf_idxs[i], 1, 0)  # shape=(no. train, no. boost, no. class)
-        print(f"mask is {mask}")
-        print(f"shape of mask: {mask.shape}")
-        print(f"shape of prod: {(leaf_dvs * test_gradients[i]).shape}")
-        mask_tensor = torch.tensor(mask , dtype=torch.float32, device = torch.device('cuda:0'))
+        mask_tensor = torch.tensor(mask , dtype=torch.float32, device = torch.device(f'cuda:{rank}'))
         mask_tensor = mask_tensor.squeeze() 
-        #prod = torch.matmul(train_leaf_dvs , test_gradients[i])* mask  # shape=(no. train, no. boost, no. class)
-        
-        #prod = torch.einsum('ijk,jk->ijk', train_leaf_dvs, test_gradients[i]) * mask  # shape=(no. train, no. boost, no. class)
-            # Debug prints
-        #print(f"leaf_dvs shape: {len(leaf_dvs)}")
-        #print(f"one element of it: {leaf_dvs[0].shape}")
-        #print(f"length of test gradients: {len(test_gradients)}")
-        #print(f"test_gradients[{i}] shape: {test_gradients[i].shape}, type: {type(test_gradients[i])}")
-        #print(f"mask_tensor shape: {mask_tensor.shape}, type: {type(mask_tensor)}")
-
-        # Ensure all tensors are on the same device
         
         
         prod = leaf_dvs * test_gradients[i] * mask_tensor   # shape=(no. train, no. boost, no. class)
-
+        print(f"entire prod: {prod}")
+        print(f"leaf dvs shape: {leaf_dvs.shape}")
+        print(f"test gradient at i shape: {test_gradients[i].shape}")
+        print(f"prod shape: {prod.shape}") 
         # sum over boosts and classes
-        influence[:, i] = torch.sum(prod)  # shape=(no. train,)
+        influence[:, i] = torch.sum(prod , dim=1)  # shape=(no. train,)
         print(f"influence: {influence}")
         influence_cpu = influence.cpu().numpy()
         values = influence_cpu[:, 0]  # shape=(no. train,)
@@ -342,42 +336,25 @@ def calc_infl_mp():
     mp_engine = MPEngine(num_processing , multi_k_save_path_list )
     MP_run_calc_infulence_function(0, gpu_num, 1*threads_per_gpu + 1,  mp_engine, X_train, X_test, y_train, y_test , Ks , multi_k_save_path_list,)
 
-    """""
-
     mp_handler = []
     mp_args = []
     print(f"GPU Num: {gpu_num}, Threads per GPU: {threads_per_gpu}")
     for i in range(gpu_num):
         for j in range(threads_per_gpu):
+            print("Appending")
             mp_handler.append(mp.Process(target=MP_run_calc_infulence_function, args=(i, gpu_num, i*threads_per_gpu + j,  mp_engine, X_train, X_test, y_train, y_test , Ks , multi_k_save_path_list,)))
             mp_args.append(mp_handler[-1]._args)
-    #mp_handler.append(mp.Process(target=MP_run_get_result, args=( mp_engine , X_train, X_test, y_train, y_test)))
 
     for x in mp_handler:
+        print("Starting")
         x.start()
 
     while mp_handler[-1].is_alive():
-        print("entering handler loop")
         cur_processes_num = len([1 for x in mp_handler if x.is_alive()])
-        print(f"Current processes running: {cur_processes_num}/{num_processing}")
-        
-        if cur_processes_num < num_processing + 1:
-            print(f"ready to restart processing, {cur_processes_num}/{num_processing}")
-            for i, x in enumerate(mp_handler):
-                print(f"in the for loop at i: {i}")
-                if x.is_alive() != True:
-                    print(f"start {mp_args[i]}")
-                    mp_handler[i] = mp.Process(target=MP_run_calc_infulence_function, args=mp_args[i] + (True,))
-                    mp_handler[i].start()
-                print("After if")
-            continue
-        print("after continue")
         with mp_engine.cur_processes_num.get_lock():
             mp_engine.cur_processes_num.value = cur_processes_num
         time.sleep(1)
 
     for x in mp_handler:
         x.terminate()
-
-"""
-
+        
